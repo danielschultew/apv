@@ -104,12 +104,14 @@ class AnimationManager {
             flinging = false;
             pdfView.loadPages();
             hideHandle();
-            pdfView.performPageSnap();
+            pdfView.snapToFocusPage();
         }
     }
 
     public void stopAll() {
         if (animation != null) {
+            animation.removeAllUpdateListeners();
+            animation.removeAllListeners();
             animation.cancel();
             animation = null;
         }
@@ -200,7 +202,7 @@ class AnimationManager {
         @Override
         public void onAnimationEnd(Animator animation) {
             pdfView.loadPages();
-            pdfView.performPageSnap();
+            pdfView.snapToFocusPage();
             hideHandle();
         }
 

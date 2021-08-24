@@ -31,362 +31,382 @@ import com.shockwave.pdfium.util.SizeF;
 
 /** This Manager takes care of moving the PDFView, set its zoom track user actions. */
 class DragPinchManager
-    implements GestureDetector.OnGestureListener,
+        implements GestureDetector.OnGestureListener,
         GestureDetector.OnDoubleTapListener,
         ScaleGestureDetector.OnScaleGestureListener,
         View.OnTouchListener {
 
-  private PDFView pdfView;
-  private AnimationManager animationManager;
+    private static final String TAG = DragPinchManager.class.getSimpleName();
 
-  private GestureDetector gestureDetector;
-  private ScaleGestureDetector scaleGestureDetector;
+    private final PDFView pdfView;
+    private final AnimationManager animationManager;
 
-  private boolean scrolling = false;
-  private boolean scaling = false;
-  private boolean enabled = false;
+    private final GestureDetector gestureDetector;
+    private final ScaleGestureDetector scaleGestureDetector;
 
-  DragPinchManager(PDFView pdfView, AnimationManager animationManager) {
-    this.pdfView = pdfView;
-    this.animationManager = animationManager;
-    gestureDetector = new GestureDetector(pdfView.getContext(), this);
-    scaleGestureDetector = new ScaleGestureDetector(pdfView.getContext(), this);
-    pdfView.setOnTouchListener(this);
-  }
+    private boolean scrolling = false;
+    private boolean scaling = false;
+    private boolean enabled = false;
 
-  void enable() {
-    enabled = true;
-  }
+    DragPinchManager(PDFView pdfView, AnimationManager animationManager) {
+        this.pdfView = pdfView;
+        this.animationManager = animationManager;
+        gestureDetector = new GestureDetector(pdfView.getContext(), this);
+        scaleGestureDetector = new ScaleGestureDetector(pdfView.getContext(), this);
+        pdfView.setOnTouchListener(this);
+    }
 
-  void disable() {
-    enabled = false;
-  }
+    void enable() {
+        enabled = true;
+    }
 
-  void disableLongpress() {
-    gestureDetector.setIsLongpressEnabled(false);
-  }
+    void disable() {
+        enabled = false;
+    }
 
-  @Override
-  public boolean onSingleTapConfirmed(MotionEvent e) {
-    boolean onTapHandled = pdfView.callbacks.callOnTap(e);
-    boolean linkTapped = checkLinkTapped(e.getX(), e.getY());
-    if (!onTapHandled && !linkTapped) {
-      ScrollHandle ps = pdfView.getScrollHandle();
-      if (ps != null && !pdfView.documentFitsView()) {
-        if (!ps.shown()) {
-          ps.show();
-        } else {
-          ps.hide();
+    void disableLongpress() {
+        gestureDetector.setIsLongpressEnabled(false);
+    }
+
+    @Override
+    public boolean onSingleTapConfirmed(MotionEvent e) {
+        boolean onTapHandled = pdfView.callbacks.callOnTap(e);
+        boolean linkTapped = checkLinkTapped(e.getX(), e.getY());
+        if (!onTapHandled && !linkTapped) {
+            ScrollHandle ps = pdfView.getScrollHandle();
+            if (ps != null && !pdfView.documentFitsView()) {
+                if (!ps.shown()) {
+                    ps.show();
+                } else {
+                    ps.hide();
+                }
+            }
         }
-      }
-    }
-    pdfView.performClick();
-    return true;
-  }
-
-  private boolean checkLinkTapped(float x, float y) {
-    PdfFile pdfFile = pdfView.pdfFile;
-    if (pdfFile == null) {
-      return false;
-    }
-    float mappedX = -pdfView.getCurrentXOffset() + x;
-    float mappedY = -pdfView.getCurrentYOffset() + y;
-    int page =
-        pdfFile.getPageAtOffset(pdfView.isSwipeVertical() ? mappedY : mappedX, pdfView.getZoom());
-    SizeF pageSize = pdfFile.getScaledPageSize(page, pdfView.getZoom());
-    int pageX, pageY;
-    if (pdfView.isSwipeVertical()) {
-      pageX = (int) pdfFile.getSecondaryPageOffset(page, pdfView.getZoom());
-      pageY = (int) pdfFile.getPageOffset(page, pdfView.getZoom());
-    } else {
-      pageY = (int) pdfFile.getSecondaryPageOffset(page, pdfView.getZoom());
-      pageX = (int) pdfFile.getPageOffset(page, pdfView.getZoom());
-    }
-    for (PdfDocument.Link link : pdfFile.getPageLinks(page)) {
-      RectF mapped =
-          pdfFile.mapRectToDevice(
-              page,
-              pageX,
-              pageY,
-              (int) pageSize.getWidth(),
-              (int) pageSize.getHeight(),
-              link.getBounds());
-      mapped.sort();
-      if (mapped.contains(mappedX, mappedY)) {
-        pdfView.callbacks.callLinkHandler(new LinkTapEvent(x, y, mappedX, mappedY, mapped, link));
+        pdfView.performClick();
         return true;
-      }
-    }
-    return false;
-  }
-
-  private void startPageFling(
-      MotionEvent downEvent, MotionEvent ev, float velocityX, float velocityY) {
-    if (!checkDoPageFling(velocityX, velocityY)) {
-      return;
     }
 
-    int direction;
-    if (pdfView.isSwipeVertical()) {
-      direction = velocityY > 0 ? -1 : 1;
-    } else {
-      direction = velocityX > 0 ? -1 : 1;
-    }
-    // get the focused page during the down event to ensure only a single page is changed
-    float delta =
-        pdfView.isSwipeVertical() ? ev.getY() - downEvent.getY() : ev.getX() - downEvent.getX();
-    float offsetX = pdfView.getCurrentXOffset() - delta * pdfView.getZoom();
-    float offsetY = pdfView.getCurrentYOffset() - delta * pdfView.getZoom();
-    int startingPage = pdfView.findFocusPage(offsetX, offsetY);
-    int newPage = startingPage;
-    Log.d("PAGE", String.format("direction: %d", direction));
-    Log.d("PAGE", String.format("Startingpage: %d", startingPage));
-    int targetPage = 0;
-    if (pdfView.isOnLandscapeOrientation()
-        && pdfView.isOnDualPageMode()
-        && direction == -1
-        && startingPage != 1) {
-      targetPage = Math.max(0, Math.min(pdfView.getPageCount() - 1, startingPage - 2));
-      newPage -= 2;
-    } else if (pdfView.isOnLandscapeOrientation()
-        && pdfView.isOnDualPageMode()
-        && direction == 1
-        && startingPage % 2 == 0
-        && pdfView.pdfHasCover()) {
-      targetPage = Math.max(0, Math.min(pdfView.getPageCount() - 1, startingPage + 1));
-      newPage += 1;
-    } else if (pdfView.isOnLandscapeOrientation() && pdfView.isOnDualPageMode() && direction == 1) {
-      targetPage = Math.max(0, Math.min(pdfView.getPageCount() - 1, startingPage + 2));
-      newPage += 2;
-    } else {
-      targetPage = Math.max(0, Math.min(pdfView.getPageCount() - 1, startingPage + direction));
-      newPage -= direction;
-    }
+    private boolean checkLinkTapped(float x, float y) {
+        PdfFile pdfFile = pdfView.pdfFile;
 
-    SnapEdge edge = pdfView.findSnapEdge(targetPage);
-    float offset = pdfView.snapOffsetForPage(targetPage, edge);
-    Log.d("PAGE", String.format("Target Page: %d", targetPage));
+        if (pdfFile == null) {
+            return false;
+        }
 
-    if (pdfView.isOnLandscapeOrientation()
-        && pdfView.isOnDualPageMode()
-        && startingPage == 1
-        && direction == -1
-        && pdfView.pdfHasCover()) {
-      offset -= pdfView.getPageSize(targetPage).getWidth() * 1.5;
-    } else if (pdfView.isOnLandscapeOrientation()
-        && pdfView.isOnDualPageMode()
-        && startingPage != 0) {
-      offset += pdfView.getPageSize(targetPage).getWidth() / 2;
-    } else if (pdfView.isOnLandscapeOrientation()
-        && pdfView.isOnDualPageMode()
-        && startingPage == 0) {
-      offset += pdfView.getPageSize(targetPage).getWidth() / 2;
+        float mappedX = -pdfView.getCurrentXOffset() + x;
+        float mappedY = -pdfView.getCurrentYOffset() + y;
+
+        int page = pdfFile.getPageAtOffset(pdfView.isSwipeVertical() ? mappedY : mappedX, pdfView.getZoom());
+
+        SizeF pageSize = pdfFile.getScaledPageSize(page, pdfView.getZoom());
+        int pageX, pageY;
+
+        if (pdfView.isSwipeVertical()) {
+            pageX = (int) pdfFile.getSecondaryPageOffset(page, pdfView.getZoom());
+            pageY = (int) pdfFile.getPageOffset(page, pdfView.getZoom());
+        } else {
+            pageY = (int) pdfFile.getSecondaryPageOffset(page, pdfView.getZoom());
+            pageX = (int) pdfFile.getPageOffset(page, pdfView.getZoom());
+        }
+
+        for (PdfDocument.Link link : pdfFile.getPageLinks(page)) {
+            RectF mapped =
+                    pdfFile.mapRectToDevice(
+                            page,
+                            pageX,
+                            pageY,
+                            (int) pageSize.getWidth(),
+                            (int) pageSize.getHeight(),
+                            link.getBounds());
+            mapped.sort();
+
+            if (mapped.contains(mappedX, mappedY)) {
+                pdfView.callbacks.callLinkHandler(new LinkTapEvent(x, y, mappedX, mappedY, mapped, link));
+                return true;
+            }
+        }
+        return false;
     }
 
-    Log.d("PAGE", String.format("Offset after: %f", offset));
-    Log.d("PAGE", String.format("New page is: %d", newPage));
+    private void startPageFling(MotionEvent downEvent, MotionEvent ev, float velocityX, float velocityY) {
+        if (!checkDoPageFling(velocityX, velocityY)) {
+            return;
+        }
 
-    animationManager.startPageFlingAnimation(-offset);
-  }
+        int direction;
+        if (pdfView.isSwipeVertical()) {
+            direction = velocityY > 0 ? -1 : 1;
+        } else {
+            direction = velocityX > 0 ? -1 : 1;
+        }
+        // get the focused page during the down event to ensure only a single page is changed
+        float delta = pdfView.isSwipeVertical() ? ev.getY() - downEvent.getY() : ev.getX() - downEvent.getX();
+        float offsetX = pdfView.getCurrentXOffset() - delta * pdfView.getZoom();
+        float offsetY = pdfView.getCurrentYOffset() - delta * pdfView.getZoom();
+        int startingPage = pdfView.findFocusPage(offsetX, offsetY);
+        int newPage = startingPage;
 
-  @Override
-  public boolean onDoubleTap(MotionEvent e) {
-    if (!pdfView.isDoubletapEnabled()) {
-      return false;
+        Log.d(TAG, String.format("direction: %d", direction));
+        Log.d(TAG, String.format("Startingpage: %d", startingPage));
+
+        int targetPage = 0;
+
+        if (pdfView.isOnLandscapeOrientation()
+                && pdfView.isOnDualPageMode()
+                && direction == -1
+                && startingPage != 1) {
+            targetPage = Math.max(0, Math.min(pdfView.getPageCount() - 1, startingPage - 2));
+            newPage -= 2;
+        } else if (pdfView.isOnLandscapeOrientation()
+                && pdfView.isOnDualPageMode()
+                && direction == 1
+                && startingPage % 2 == 0
+                && pdfView.pdfHasCover()) {
+            targetPage = Math.max(0, Math.min(pdfView.getPageCount() - 1, startingPage + 1));
+            newPage += 1;
+        } else if (pdfView.isOnLandscapeOrientation() && pdfView.isOnDualPageMode() && direction == 1) {
+            targetPage = Math.max(0, Math.min(pdfView.getPageCount() - 1, startingPage + 2));
+            newPage += 2;
+        } else {
+            targetPage = Math.max(0, Math.min(pdfView.getPageCount() - 1, startingPage + direction));
+            newPage -= direction;
+        }
+
+        SnapEdge edge = pdfView.findSnapEdge(targetPage);
+        float offset = pdfView.snapOffsetForPage(targetPage, edge);
+        Log.d("PAGE", String.format("Target Page: %d", targetPage));
+
+        if (pdfView.isOnLandscapeOrientation()
+                && pdfView.isOnDualPageMode()
+                && startingPage == 1
+                && direction == -1
+                && pdfView.pdfHasCover()) {
+            offset -= pdfView.getPageSize(targetPage).getWidth() * 1.5;
+        } else if (pdfView.isOnLandscapeOrientation()
+                && pdfView.isOnDualPageMode()
+                && startingPage != 0) {
+            offset += pdfView.getPageSize(targetPage).getWidth() / 2;
+        } else if (pdfView.isOnLandscapeOrientation()
+                && pdfView.isOnDualPageMode()
+                && startingPage == 0) {
+            if (!pdfView.hasCover() || newPage >= startingPage) {
+                offset += pdfView.getPageSize(targetPage).getWidth() / 2;
+            }
+        }
+
+        Log.d(TAG, String.format("Offset after: %f", offset));
+        Log.d(TAG, String.format("New page is: %d", newPage));
+
+        animationManager.startPageFlingAnimation(-offset);
     }
 
-    if (pdfView.getZoom() < pdfView.getMidZoom()) {
-      pdfView.zoomWithAnimation(e.getX(), e.getY(), pdfView.getMidZoom());
-    } else if (pdfView.getZoom() < pdfView.getMaxZoom()) {
-      pdfView.zoomWithAnimation(e.getX(), e.getY(), pdfView.getMaxZoom());
-    } else {
-      pdfView.resetZoomWithAnimation();
-    }
-    return true;
-  }
+    @Override
+    public boolean onDoubleTap(MotionEvent e) {
+        if (!pdfView.isDoubletapEnabled()) {
+            return false;
+        }
 
-  @Override
-  public boolean onDoubleTapEvent(MotionEvent e) {
-    return false;
-  }
-
-  @Override
-  public boolean onDown(MotionEvent e) {
-    animationManager.stopFling();
-    return true;
-  }
-
-  @Override
-  public void onShowPress(MotionEvent e) {}
-
-  @Override
-  public boolean onSingleTapUp(MotionEvent e) {
-    return false;
-  }
-
-  @Override
-  public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
-    scrolling = true;
-    if (pdfView.isZooming() || pdfView.isSwipeEnabled()) {
-      pdfView.moveRelativeTo(-distanceX, -distanceY);
-    }
-    if (!scaling || pdfView.doRenderDuringScale()) {
-      pdfView.loadPageByOffset();
-    }
-    return true;
-  }
-
-  private void onScrollEnd(MotionEvent event) {
-    pdfView.loadPages();
-    hideHandle();
-    if (!animationManager.isFlinging()) {
-      pdfView.performPageSnap();
-    }
-  }
-
-  @Override
-  public void onLongPress(MotionEvent e) {
-    pdfView.callbacks.callOnLongPress(e);
-  }
-
-  @Override
-  public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
-    if (!pdfView.isSwipeEnabled()) {
-      return false;
-    }
-    if (pdfView.isPageFlingEnabled()) {
-      if (pdfView.pageFillsScreen()) {
-        onBoundedFling(velocityX, velocityY);
-      } else {
-        startPageFling(e1, e2, velocityX, velocityY);
-      }
-      return true;
+        if (pdfView.getZoom() < pdfView.getMidZoom()) {
+            pdfView.zoomWithAnimation(e.getX(), e.getY(), pdfView.getMidZoom());
+        } else if (pdfView.getZoom() < pdfView.getMaxZoom()) {
+            pdfView.zoomWithAnimation(e.getX(), e.getY(), pdfView.getMaxZoom());
+        } else {
+            pdfView.resetZoomWithAnimation();
+        }
+        return true;
     }
 
-    int xOffset = (int) pdfView.getCurrentXOffset();
-    int yOffset = (int) pdfView.getCurrentYOffset();
-
-    float minX, minY;
-    PdfFile pdfFile = pdfView.pdfFile;
-    if (pdfView.isSwipeVertical()) {
-
-      minX = -(pdfView.toCurrentScale(pdfFile.getMaxPageWidth()) - pdfView.getWidth());
-      minY = -(pdfFile.getDocLen(pdfView.getZoom()) - pdfView.getHeight());
-    } else {
-      minX = -(pdfFile.getDocLen(pdfView.getZoom()) - pdfView.getWidth());
-      minY = -(pdfView.toCurrentScale(pdfFile.getMaxPageHeight()) - pdfView.getHeight());
+    @Override
+    public boolean onDoubleTapEvent(MotionEvent e) {
+        return false;
     }
 
-    animationManager.startFlingAnimation(
-        xOffset, yOffset, (int) (velocityX), (int) (velocityY), (int) minX, 0, (int) minY, 0);
-    return true;
-  }
-
-  private void onBoundedFling(float velocityX, float velocityY) {
-    int xOffset = (int) pdfView.getCurrentXOffset();
-    int yOffset = (int) pdfView.getCurrentYOffset();
-
-    PdfFile pdfFile = pdfView.pdfFile;
-    float pageStart;
-    float pageEnd;
-    if(!pdfView.isOnLandscapeOrientation()) {
-      pageStart = -pdfFile.getPageOffset(pdfView.getCurrentPage(), pdfView.getZoom());
-      pageEnd = pageStart - pdfFile.getPageLength(pdfView.getCurrentPage(), pdfView.getZoom());
-    } else if(pdfView.pdfHasCover()) {
-      pageStart = pdfView.getCurrentPage() % 2 != 0 ?
-              -pdfFile.getPageOffset(pdfView.getCurrentPage(), pdfView.getZoom()) :
-              -pdfFile.getPageOffset(pdfView.getCurrentPage()-1, pdfView.getZoom());
-      pageEnd = pageStart - (pdfView.getCurrentPage() % 2 != 0 ?
-              pdfFile.getPageLength(pdfView.getCurrentPage(), pdfView.getZoom()) + pdfFile.getPageLength(pdfView.getCurrentPage() + 1, pdfView.getZoom()) :
-              pdfFile.getPageLength(pdfView.getCurrentPage(), pdfView.getZoom()) + pdfFile.getPageLength(pdfView.getCurrentPage() - 1, pdfView.getZoom()));
-    }else {
-      pageStart = pdfView.getCurrentPage() % 2 == 0 ?
-              -pdfFile.getPageOffset(pdfView.getCurrentPage(), pdfView.getZoom()) :
-              -pdfFile.getPageOffset(pdfView.getCurrentPage()-1, pdfView.getZoom());
-      pageEnd = pageStart - (pdfView.getCurrentPage() % 2 == 0 ?
-              pdfFile.getPageLength(pdfView.getCurrentPage(), pdfView.getZoom()) + pdfFile.getPageLength(pdfView.getCurrentPage() + 1, pdfView.getZoom()) :
-              pdfFile.getPageLength(pdfView.getCurrentPage(), pdfView.getZoom()) + pdfFile.getPageLength(pdfView.getCurrentPage() - 1, pdfView.getZoom()));
-    }
-    float minX, minY, maxX, maxY;
-    if (pdfView.isSwipeVertical()) {
-      minX = -(pdfView.toCurrentScale(pdfFile.getMaxPageWidth()) - pdfView.getWidth());
-      minY = pageEnd + pdfView.getHeight();
-      maxX = 0;
-      maxY = pageStart;
-    } else {
-      minX = pageEnd + pdfView.getWidth();
-      minY = -(pdfView.toCurrentScale(pdfFile.getMaxPageHeight()) - pdfView.getHeight());
-      maxX = pageStart;
-      maxY = 0;
+    @Override
+    public boolean onDown(MotionEvent e) {
+        animationManager.stopFling();
+        return true;
     }
 
-    animationManager.startFlingAnimation(
-        xOffset,
-        yOffset,
-        (int) (velocityX),
-        (int) (velocityY),
-        (int) minX,
-        (int) maxX,
-        (int) minY,
-        (int) maxY);
-  }
+    @Override
+    public void onShowPress(MotionEvent e) {}
 
-  @Override
-  public boolean onScale(ScaleGestureDetector detector) {
-    float dr = detector.getScaleFactor();
-    float wantedZoom = pdfView.getZoom() * dr;
-    float minZoom = Math.min(MINIMUM_ZOOM, pdfView.getMinZoom());
-    float maxZoom = Math.min(MAXIMUM_ZOOM, pdfView.getMaxZoom());
-    if (wantedZoom < minZoom) {
-      dr = minZoom / pdfView.getZoom();
-    } else if (wantedZoom > maxZoom) {
-      dr = maxZoom / pdfView.getZoom();
-    }
-    pdfView.zoomCenteredRelativeTo(dr, new PointF(detector.getFocusX(), detector.getFocusY()));
-    return true;
-  }
-
-  @Override
-  public boolean onScaleBegin(ScaleGestureDetector detector) {
-    scaling = true;
-    return true;
-  }
-
-  @Override
-  public void onScaleEnd(ScaleGestureDetector detector) {
-    pdfView.loadPages();
-    hideHandle();
-    scaling = false;
-  }
-
-  @Override
-  public boolean onTouch(View v, MotionEvent event) {
-    if (!enabled) {
-      return false;
+    @Override
+    public boolean onSingleTapUp(MotionEvent e) {
+        return false;
     }
 
-    boolean retVal = scaleGestureDetector.onTouchEvent(event);
-    retVal = gestureDetector.onTouchEvent(event) || retVal;
+    @Override
+    public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
+        scrolling = true;
 
-    if (event.getAction() == MotionEvent.ACTION_UP) {
-      if (scrolling) {
-        scrolling = false;
-        onScrollEnd(event);
-      }
+        if (pdfView.isZooming() || pdfView.isSwipeEnabled()) {
+            pdfView.moveRelativeTo(-distanceX, -distanceY);
+        }
+
+        if (!scaling || pdfView.doRenderDuringScale()) {
+            pdfView.loadPageByOffset();
+        }
+
+        return true;
     }
-    return retVal;
-  }
 
-  private void hideHandle() {
-    ScrollHandle scrollHandle = pdfView.getScrollHandle();
-    if (scrollHandle != null && scrollHandle.shown()) {
-      scrollHandle.hideDelayed();
+    private void onScrollEnd(MotionEvent event) {
+        pdfView.loadPages();
+        hideHandle();
+
+        if (!animationManager.isFlinging()) {
+            pdfView.snapToFocusPage();
+        }
     }
-  }
 
-  private boolean checkDoPageFling(float velocityX, float velocityY) {
-    float absX = Math.abs(velocityX);
-    float absY = Math.abs(velocityY);
-    return pdfView.isSwipeVertical() ? absY > absX : absX > absY;
-  }
+    @Override
+    public void onLongPress(MotionEvent e) {
+        pdfView.callbacks.callOnLongPress(e);
+    }
+
+    @Override
+    public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
+        if (!pdfView.isSwipeEnabled()) {
+            return false;
+        }
+
+        if (pdfView.isPageFlingEnabled()) {
+            Log.d(TAG, "isPageFlingEnabled");
+            if (pdfView.pageFillsScreen()) {
+                onBoundedFling(velocityX, velocityY);
+            } else {
+                startPageFling(e1, e2, velocityX, velocityY);
+            }
+            return true;
+        }
+
+        int xOffset = (int) pdfView.getCurrentXOffset();
+        int yOffset = (int) pdfView.getCurrentYOffset();
+
+        float minX, minY;
+        PdfFile pdfFile = pdfView.pdfFile;
+
+        if (pdfView.isSwipeVertical()) {
+            minX = -(pdfView.toCurrentScale(pdfFile.getMaxPageWidth()) - pdfView.getWidth());
+            minY = -(pdfFile.getDocLen(pdfView.getZoom()) - pdfView.getHeight());
+        } else {
+            minX = -(pdfFile.getDocLen(pdfView.getZoom()) - pdfView.getWidth());
+            minY = -(pdfView.toCurrentScale(pdfFile.getMaxPageHeight()) - pdfView.getHeight());
+        }
+
+        animationManager.startFlingAnimation(
+                xOffset, yOffset, (int) (velocityX), (int) (velocityY), (int) minX, 0, (int) minY, 0);
+        return true;
+    }
+
+    private void onBoundedFling(float velocityX, float velocityY) {
+        int xOffset = (int) pdfView.getCurrentXOffset();
+        int yOffset = (int) pdfView.getCurrentYOffset();
+
+        PdfFile pdfFile = pdfView.pdfFile;
+        float pageStart;
+        float pageEnd;
+
+        if(!pdfView.isOnLandscapeOrientation()) {
+            pageStart = -pdfFile.getPageOffset(pdfView.getCurrentPage(), pdfView.getZoom());
+            pageEnd = pageStart - pdfFile.getPageLength(pdfView.getCurrentPage(), pdfView.getZoom());
+        } else if(pdfView.pdfHasCover()) {
+            pageStart = pdfView.getCurrentPage() % 2 != 0 ?
+                    -pdfFile.getPageOffset(pdfView.getCurrentPage(), pdfView.getZoom()) :
+                    -pdfFile.getPageOffset(pdfView.getCurrentPage()-1, pdfView.getZoom());
+            pageEnd = pageStart - (pdfView.getCurrentPage() % 2 != 0 ?
+                    pdfFile.getPageLength(pdfView.getCurrentPage(), pdfView.getZoom()) + pdfFile.getPageLength(pdfView.getCurrentPage() + 1, pdfView.getZoom()) :
+                    pdfFile.getPageLength(pdfView.getCurrentPage(), pdfView.getZoom()) + pdfFile.getPageLength(pdfView.getCurrentPage() - 1, pdfView.getZoom()));
+        } else {
+            pageStart = pdfView.getCurrentPage() % 2 == 0 ?
+                    -pdfFile.getPageOffset(pdfView.getCurrentPage(), pdfView.getZoom()) :
+                    -pdfFile.getPageOffset(pdfView.getCurrentPage()-1, pdfView.getZoom());
+            pageEnd = pageStart - (pdfView.getCurrentPage() % 2 == 0 ?
+                    pdfFile.getPageLength(pdfView.getCurrentPage(), pdfView.getZoom()) + pdfFile.getPageLength(pdfView.getCurrentPage() + 1, pdfView.getZoom()) :
+                    pdfFile.getPageLength(pdfView.getCurrentPage(), pdfView.getZoom()) + pdfFile.getPageLength(pdfView.getCurrentPage() - 1, pdfView.getZoom()));
+        }
+
+        float minX, minY, maxX, maxY;
+
+        if (pdfView.isSwipeVertical()) {
+            minX = -(pdfView.toCurrentScale(pdfFile.getMaxPageWidth()) - pdfView.getWidth());
+            minY = pageEnd + pdfView.getHeight();
+            maxX = 0;
+            maxY = pageStart;
+        } else {
+            minX = pageEnd + pdfView.getWidth();
+            minY = -(pdfView.toCurrentScale(pdfFile.getMaxPageHeight()) - pdfView.getHeight());
+            maxX = pageStart;
+            maxY = 0;
+        }
+
+        animationManager.startFlingAnimation(
+                xOffset,
+                yOffset,
+                (int) (velocityX),
+                (int) (velocityY),
+                (int) minX,
+                (int) maxX,
+                (int) minY,
+                (int) maxY);
+    }
+
+    @Override
+    public boolean onScale(ScaleGestureDetector detector) {
+        float dr = detector.getScaleFactor();
+        float wantedZoom = pdfView.getZoom() * dr;
+        float minZoom = Math.min(MINIMUM_ZOOM, pdfView.getMinZoom());
+        float maxZoom = Math.min(MAXIMUM_ZOOM, pdfView.getMaxZoom());
+        if (wantedZoom < minZoom) {
+            dr = minZoom / pdfView.getZoom();
+        } else if (wantedZoom > maxZoom) {
+            dr = maxZoom / pdfView.getZoom();
+        }
+        pdfView.zoomCenteredRelativeTo(dr, new PointF(detector.getFocusX(), detector.getFocusY()));
+        return true;
+    }
+
+    @Override
+    public boolean onScaleBegin(ScaleGestureDetector detector) {
+        scaling = true;
+        return true;
+    }
+
+    @Override
+    public void onScaleEnd(ScaleGestureDetector detector) {
+        pdfView.loadPages();
+        hideHandle();
+        scaling = false;
+    }
+
+    @Override
+    public boolean onTouch(View v, MotionEvent event) {
+        if (!enabled) {
+            return false;
+        }
+
+        boolean retVal = scaleGestureDetector.onTouchEvent(event);
+        retVal = gestureDetector.onTouchEvent(event) || retVal;
+
+        if (event.getAction() == MotionEvent.ACTION_UP) {
+            if (scrolling) {
+                scrolling = false;
+                onScrollEnd(event);
+            }
+        }
+        return retVal;
+    }
+
+    private void hideHandle() {
+        ScrollHandle scrollHandle = pdfView.getScrollHandle();
+        if (scrollHandle != null && scrollHandle.shown()) {
+            scrollHandle.hideDelayed();
+        }
+    }
+
+    private boolean checkDoPageFling(float velocityX, float velocityY) {
+        float absX = Math.abs(velocityX);
+        float absY = Math.abs(velocityY);
+        return pdfView.isSwipeVertical() ? absY > absX : absX > absY;
+    }
 }

@@ -33,6 +33,7 @@ import android.os.HandlerThread;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.widget.RelativeLayout;
+
 import com.github.danielschultew.pdfviewer.exception.PageRenderingException;
 import com.github.danielschultew.pdfviewer.link.DefaultLinkHandler;
 import com.github.danielschultew.pdfviewer.link.LinkHandler;
@@ -64,6 +65,7 @@ import com.shockwave.pdfium.PdfDocument;
 import com.shockwave.pdfium.PdfiumCore;
 import com.shockwave.pdfium.util.Size;
 import com.shockwave.pdfium.util.SizeF;
+
 import java.io.File;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -84,6 +86,7 @@ import java.util.List;
  * #load(DocumentSource, String, int[])}. In this particular case, a userPage of 5 can refer to a
  * documentPage of 17.
  */
+@SuppressWarnings("unused")
 public class PDFView extends RelativeLayout {
 
     public class Configurator {
@@ -185,6 +188,11 @@ public class PDFView extends RelativeLayout {
 
         public Configurator dualPageMode(boolean dualPageMode) {
             this.dualPageMode = dualPageMode;
+            return this;
+        }
+
+        public Configurator hasCover(boolean hasCover) {
+            this.hasCover = hasCover;
             return this;
         }
 
@@ -808,6 +816,10 @@ public class PDFView extends RelativeLayout {
         return pdfFile.getPageAtOffset(pdfFile.getDocLen(zoom) * positionOffset, zoom);
     }
 
+    public int getPageAtOffset(float offset, float zoom) {
+        return pdfFile.getPageAtOffset(offset, zoom);
+    }
+
     public int getPageCount() {
         if (pdfFile == null) {
             return 0;
@@ -835,8 +847,23 @@ public class PDFView extends RelativeLayout {
     }
 
     public double getPdfPageWidth(int page) {
-
         return getPageSize(page).getWidth();
+    }
+
+    public SizeF getScaledPageSize(int pageIndex, float zoom) {
+        return pdfFile.getScaledPageSize(pageIndex, zoom);
+    }
+
+    public float getSecondaryPageOffset(int pageIndex, float zoom) {
+        return pdfFile.getSecondaryPageOffset(pageIndex, zoom);
+    }
+
+    public float getPageOffset(int pageIndex, float zoom) {
+        return pdfFile.getPageOffset(pageIndex, zoom);
+    }
+
+    public RectF mapRectToDevice(int pageIndex, int startX, int startY, int sizeX, int sizeY, RectF rect) {
+        return pdfFile.mapRectToDevice(pageIndex, startX, startY, sizeX, sizeY, rect);
     }
 
     /**
@@ -900,6 +927,10 @@ public class PDFView extends RelativeLayout {
 
     public boolean isBestQuality() {
         return bestQuality;
+    }
+
+    public boolean hasCover() {
+        return hasCover;
     }
 
     public boolean isFitEachPage() {
@@ -966,6 +997,7 @@ public class PDFView extends RelativeLayout {
         page = pdfFile.determineValidPageNumberFrom(page);
 
         float offset = page == 0 ? 0 : -pdfFile.getPageOffset(page, zoom);
+
         if (swipeVertical) {
             if (withAnimation) {
                 animationManager.startYAnimation(currentYOffset, offset);
@@ -980,20 +1012,24 @@ public class PDFView extends RelativeLayout {
                     offset += page % 2 != 0 ? spacingPx + pdfFile.getPageLength(page - 1, zoom) : spacingPx;
                 }
             }
+
             if (withAnimation) {
                 animationManager.startXAnimation(currentXOffset, offset);
-                performPageSnapAfterAnimation(offset);
             } else {
                 moveTo(offset, currentYOffset);
-                performPageSnapAfterAnimation(offset);
             }
+
+            snapToOffset(offset);
         }
+
+        Log.d(TAG, "jumping to page " + page);
         showPage(page);
-        Log.e(
+
+        Log.d(
                 "PDFView",
                 "maxPageSize: "
                         + toCurrentScale(pdfFile.getPageSize(page).getWidth())
-                        + "And zoom is "
+                        + " and zoom is "
                         + zoom
                         + " and screen size: "
                         + getWidth());
@@ -1028,10 +1064,12 @@ public class PDFView extends RelativeLayout {
      * @see #moveTo(float, float)
      */
     public void moveRelativeTo(float dx, float dy) {
+        //Log.d(TAG, "moveRelativeTo(float dx, float dy): " + dx);
         moveTo(currentXOffset + dx, currentYOffset + dy);
     }
 
     public void moveTo(float offsetX, float offsetY) {
+        //Log.d(TAG, "moveTo(float offsetX, float offsetY): " + offsetX);
         moveTo(offsetX, offsetY, true);
     }
 
@@ -1044,12 +1082,14 @@ public class PDFView extends RelativeLayout {
      * @param moveHandle whether to move scroll handle or not
      */
     public void moveTo(float offsetX, float offsetY, boolean moveHandle) {
+        if (pdfFile == null) {
+            return;
+        }
+
         if (swipeVertical) {
             // Check X offset
-            if (pdfFile == null) {
-                return;
-            }
             float scaledPageWidth = toCurrentScale(pdfFile.getMaxPageWidth());
+
             if (scaledPageWidth < getWidth()) {
                 offsetX = getWidth() / 2 - scaledPageWidth / 2;
             } else {
@@ -1062,6 +1102,7 @@ public class PDFView extends RelativeLayout {
 
             // Check Y offset
             float contentHeight = pdfFile.getDocLen(zoom);
+
             if (contentHeight < getHeight()) { // whole document height visible on screen
                 offsetY = (getHeight() - contentHeight) / 2;
             } else {
@@ -1081,30 +1122,28 @@ public class PDFView extends RelativeLayout {
             }
         } else {
             // Check Y offset
-            if (pdfFile == null) {
-                return;
-            } else {
-                float scaledPageHeight = toCurrentScale(pdfFile.getMaxPageHeight());
-                if (scaledPageHeight < getHeight()) {
-                    offsetY = getHeight() / 2 - scaledPageHeight / 2;
-                } else {
-                    if (offsetY > 0) {
-                        offsetY = 0;
-                    } else if (offsetY + scaledPageHeight < getHeight()) {
-                        offsetY = getHeight() - scaledPageHeight;
-                    }
-                }
+            float scaledPageHeight = toCurrentScale(pdfFile.getMaxPageHeight());
 
-                // Check X offset
-                float contentWidth = pdfFile.getDocLen(zoom);
-                if (contentWidth < getWidth()) { // whole document width visible on screen
-                    offsetX = (getWidth() - contentWidth) / 2;
-                } else {
-                    if (offsetX > 0) { // left visible
-                        offsetX = 0;
-                    } else if (offsetX + contentWidth < getWidth()) { // right visible
-                        offsetX = -contentWidth + getWidth();
-                    }
+            if (scaledPageHeight < getHeight()) {
+                offsetY = getHeight() / 2 - scaledPageHeight / 2;
+            } else {
+                if (offsetY > 0) {
+                    offsetY = 0;
+                } else if (offsetY + scaledPageHeight < getHeight()) {
+                    offsetY = getHeight() - scaledPageHeight;
+                }
+            }
+
+            // Check X offset
+            float contentWidth = pdfFile.getDocLen(zoom);
+
+            if (contentWidth < getWidth()) { // whole document width visible on screen
+                offsetX = (getWidth() - contentWidth) / 2;
+            } else {
+                if (offsetX > 0) { // left visible
+                    offsetX = 0;
+                } else if (offsetX + contentWidth < getWidth()) { // right visible
+                    offsetX = -contentWidth + getWidth();
                 }
             }
 
@@ -1117,9 +1156,12 @@ public class PDFView extends RelativeLayout {
             }
         }
 
+        //Log.d(TAG, "offsetX after calculation: " + offsetX);
+
         currentXOffset = offsetX;
         currentYOffset = offsetY;
         float positionOffset = getPositionOffset();
+
         if (moveHandle && scrollHandle != null && !documentFitsView()) {
             scrollHandle.setScroll(positionOffset);
         }
@@ -1146,6 +1188,7 @@ public class PDFView extends RelativeLayout {
         } else {
             cacheManager.cachePart(part);
         }
+
         redraw();
     }
 
@@ -1177,8 +1220,7 @@ public class PDFView extends RelativeLayout {
                     pdfFile.getPageLength(getCurrentPage(), getZoom()) + pdfFile
                             .getPageLength(getCurrentPage() - 1, getZoom()));
         }
-    /*float start = -pdfFile.getPageOffset(currentPage, zoom);
-    float end = start - pdfFile.getPageLength(currentPage, zoom);*/
+
         if (isSwipeVertical()) {
             return start > currentYOffset && end < currentYOffset - getHeight();
         } else {
@@ -1190,59 +1232,6 @@ public class PDFView extends RelativeLayout {
         return hasCover;
     }
 
-    /**
-     * Animate to the nearest snapping position for the current SnapPolicy
-     */
-    public void performPageSnap() {
-        if (!pageSnap || pdfFile == null || pdfFile.getPagesCount() == 0) {
-            return;
-        }
-        int centerPage = findFocusPage(currentXOffset, currentYOffset);
-        SnapEdge edge = findSnapEdge(centerPage);
-        if (edge == SnapEdge.NONE) {
-            return;
-        }
-
-        float offset = snapOffsetForPage(centerPage, edge);
-        if (swipeVertical) {
-            animationManager.startYAnimation(currentYOffset, -offset);
-        } else {
-            if (isLandscapeOrientation && dualPageMode) {
-                int pageNum = getCurrentPage();
-                float pdfWidth = getPageSize(pageNum).getWidth();
-                animationManager.startXAnimation(currentXOffset, -(offset + (pdfWidth / 2)));
-            } else {
-                animationManager.startXAnimation(currentXOffset, -offset);
-            }
-        }
-    }
-
-    /**
-     * Animate to the nearest snapping position for the current SnapPolicy
-     */
-    public void performPageSnapAfterAnimation(float newOffset) {
-        if (!pageSnap || pdfFile == null || pdfFile.getPagesCount() == 0) {
-            return;
-        }
-        int centerPage = findFocusPage(newOffset, currentYOffset);
-        SnapEdge edge = findSnapEdge(centerPage);
-        if (edge == SnapEdge.NONE) {
-            return;
-        }
-
-        float offset = snapOffsetForPage(centerPage, edge);
-        if (swipeVertical) {
-            animationManager.startYAnimation(currentYOffset, -offset);
-        } else {
-            if (isLandscapeOrientation && dualPageMode) {
-                int pageNum = getCurrentPage();
-                float pdfWidth = getPageSize(pageNum).getWidth();
-                animationManager.startXAnimation(currentXOffset, -(offset + (pdfWidth / 2)));
-            } else {
-                animationManager.startXAnimation(currentXOffset, -offset);
-            }
-        }
-    }
 
     public void recycle() {
         waitingDocumentConfigurator = null;
@@ -1338,19 +1327,70 @@ public class PDFView extends RelativeLayout {
         if (swipeVertical) {
             moveTo(currentXOffset, (-pdfFile.getDocLen(zoom) + getHeight()) * progress, moveHandle);
         } else {
-
             if (isLandscapeOrientation && dualPageMode) {
                 int pageNum = getCurrentPage();
-                float pdfWidth = getPageSize(pageNum).getWidth();
-                moveTo(
-                        (-pdfFile.getDocLen(zoom) + getWidth() - pdfWidth / 2f) * progress,
-                        currentYOffset,
-                        moveHandle);
+
+                // in hasCover Mode, we show the first page centered across the whole screen
+                if (pageNum > 0 || !hasCover) {
+                    float pdfWidth = getPageSize(pageNum).getWidth();
+                    float newOffsetX = (-pdfFile.getDocLen(zoom) + getWidth() - pdfWidth / 2f) * progress;
+                    moveTo(newOffsetX, currentYOffset, moveHandle);
+                } else {
+                    moveTo((-pdfFile.getDocLen(zoom) + getWidth()) * progress, currentYOffset, moveHandle);
+                }
             } else {
                 moveTo((-pdfFile.getDocLen(zoom) + getWidth()) * progress, currentYOffset, moveHandle);
             }
         }
         loadPageByOffset();
+    }
+
+    /**
+     * Animate to the nearest snapping position for the current SnapPolicy
+     */
+    public void snapToFocusPage() {
+        Log.d(TAG, "snapToFocusPage()");
+
+        snapToOffset(currentXOffset);
+    }
+
+    /**
+     * Animate to the nearest snapping position for the current SnapPolicy
+     */
+    public void snapToOffset(float newOffset) {
+        if (!pageSnap || pdfFile == null || pdfFile.getPagesCount() == 0) {
+            return;
+        }
+
+        boolean landscapeDualPageCoverEnabled = isLandscapeOrientation && dualPageMode && hasCover;
+
+        int centerPage = findFocusPage(newOffset, currentYOffset);
+
+        // in landscape, dualPage and Cover mode, we never snap to a right (even) page
+        if (landscapeDualPageCoverEnabled && centerPage > 0 && centerPage % 2 == 0) {
+            centerPage -= 1;
+        }
+
+        SnapEdge edge = findSnapEdge(centerPage);
+
+        if (edge == SnapEdge.NONE) {
+            return;
+        }
+
+        float offset = snapOffsetForPage(centerPage, edge);
+        float modifiedOffset = -offset;
+
+        if (swipeVertical) {
+            animationManager.startYAnimation(currentYOffset, -offset);
+        } else {
+            // in hasCover Mode, we need to adjust snapping for non cover pages
+            if (landscapeDualPageCoverEnabled && centerPage > 0) {
+                float pdfWidth = getPageSize(centerPage).getWidth();
+                modifiedOffset = -(offset + (pdfWidth / 2));
+            }
+
+            animationManager.startXAnimation(currentXOffset, modifiedOffset);
+        }
     }
 
     public void stopFling() {
@@ -1551,17 +1591,19 @@ public class PDFView extends RelativeLayout {
     }
 
     int findFocusPage(float xOffset, float yOffset) {
-
         float currOffset = swipeVertical ? yOffset : xOffset;
         float length = swipeVertical ? getHeight() : getWidth();
+
         // make sure first and last page can be found
         if (currOffset > -1) {
             return 0;
         } else if (currOffset < -pdfFile.getDocLen(zoom) + length + 1) {
             return pdfFile.getPagesCount() - 1;
         }
+
         // else find page in center
         float center = isOnDualPageMode() ? currOffset - length / 3f : currOffset - length / 2f;
+
         return pdfFile.getPageAtOffset(-center, zoom);
     }
 
@@ -1572,28 +1614,29 @@ public class PDFView extends RelativeLayout {
         if (!pageSnap || page < 0) {
             return SnapEdge.NONE;
         }
+
         float currentOffset = swipeVertical ? currentYOffset : currentXOffset;
         float offset;
         float offsetMinus1;
-        int length;
+        int length = swipeVertical ? getHeight() : getWidth();
         float pageLength;
+
         if (!isOnDualPageMode() && !isLandscapeOrientation) {
             Log.e("SNAP EDGE", "OK in portrait mode");
+            pageLength = pdfFile.getPageLength(page, zoom);
+
             offset = -pdfFile.getPageOffset(page, zoom);
             offsetMinus1 = -pdfFile.getPageOffset(page, zoom);
-            length = swipeVertical ? getHeight() : getWidth();
-            pageLength = pdfFile.getPageLength(page, zoom);
         } else {
+            pageLength = pdfFile.getPageLength(page, zoom) + pdfFile.getPageLength(page + 1, zoom);
+
             if (hasCover && page % 2 != 0) {
-                pageLength = pdfFile.getPageLength(page, zoom) + pdfFile.getPageLength(page + 1, zoom);
                 offset = -pdfFile.getPageOffset(page + 1, zoom);
                 offsetMinus1 = -pdfFile.getPageOffset(page, zoom);
             } else {
-                pageLength = pdfFile.getPageLength(page, zoom) + pdfFile.getPageLength(page + 1, zoom);
                 offset = -pdfFile.getPageOffset(page, zoom);
                 offsetMinus1 = -pdfFile.getPageOffset(page - 1, zoom);
             }
-            length = swipeVertical ? getHeight() : getWidth();
         }
 
         if (length >= pageLength) {
@@ -1602,22 +1645,19 @@ public class PDFView extends RelativeLayout {
             if (!isLandscapeOrientation) {
                 if (currentOffset >= offset) {
                     return SnapEdge.START;
-
                 } else if (offset - pageLength >= currentOffset - length) {
                     return SnapEdge.END;
-
                 }
             } else {
                 if (currentOffset >= offsetMinus1) {
                     return SnapEdge.START;
-
                 } else if (offset - pageLength >= currentOffset - length - 0.8) {
                     return SnapEdge.END;
-
                 }
             }
 
         }
+
         return SnapEdge.NONE;
     }
 
@@ -1665,6 +1705,7 @@ public class PDFView extends RelativeLayout {
         OnErrorListener onErrorListener = callbacks.getOnError();
         recycle();
         invalidate();
+
         if (onErrorListener != null) {
             onErrorListener.onError(t);
         } else {
@@ -1678,6 +1719,7 @@ public class PDFView extends RelativeLayout {
         }
 
         float offset, screenCenter;
+
         if (swipeVertical) {
             offset = currentYOffset;
             screenCenter = ((float) getHeight()) / 2;
@@ -1709,6 +1751,8 @@ public class PDFView extends RelativeLayout {
         if (recycled) {
             return;
         }
+
+        Log.d(TAG, "showing page " + pageNb);
 
         // Check the page number and makes the
         // difference between UserPages and DocumentPages

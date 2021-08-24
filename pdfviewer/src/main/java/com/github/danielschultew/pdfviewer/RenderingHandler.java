@@ -38,7 +38,7 @@ class RenderingHandler extends Handler {
      */
     static final int MSG_RENDER_TASK = 1;
 
-    private static final String TAG = RenderingHandler.class.getName();
+    private static final String TAG = RenderingHandler.class.getSimpleName();
 
     private PDFView pdfView;
 
